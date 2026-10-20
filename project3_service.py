@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import joblib
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, GroupShuffleSplit
+from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression, LinearRegression, Ridge, Lasso, ElasticNet
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
@@ -47,6 +47,22 @@ else:
     except Exception:
         plt.rc('font', family='AppleGothic')
 plt.rcParams['axes.unicode_minus'] = False
+
+# ---------------- 그래프 공통 스타일 ----------------
+C_BLUE, C_ORANGE, C_AQUA, C_VIOLET = '#2a78d6', '#eb6834', '#1baf7a', '#6250d6'
+C_RED, C_WARN, C_GRAY = '#e34948', '#eda100', '#8a8985'
+INK, INK2, GRID = '#0b0b0b', '#52514e', '#e6e5e1'
+plt.rcParams.update({
+    'figure.dpi': 110, 'figure.facecolor': 'white', 'axes.facecolor': 'white',
+    'axes.edgecolor': GRID, 'axes.labelcolor': INK2, 'axes.titlecolor': INK,
+    'axes.titlesize': 10, 'axes.titleweight': 'bold', 'axes.labelsize': 9,
+    'axes.spines.top': False, 'axes.spines.right': False,
+    'axes.grid': True, 'axes.axisbelow': True, 'grid.color': GRID, 'grid.linewidth': 0.7,
+    'xtick.color': INK2, 'ytick.color': INK2, 'xtick.labelsize': 8, 'ytick.labelsize': 8,
+    'legend.frameon': False, 'legend.fontsize': 8,
+    'axes.prop_cycle': plt.cycler(color=[C_BLUE, C_ORANGE, C_AQUA, C_WARN, C_VIOLET]),
+})
+PALETTE_GAS = {'SiH4': C_BLUE, 'TEOS': C_ORANGE}
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, 'model')
@@ -144,33 +160,45 @@ def make_features(df, feature_cols=None):
     return X
 
 
-def split_data(X, y, groups, mode, stratify=None):
-    """mode='random' : 강사님 방식(무작위 8:2) / 'lot' : [공정] LOT 단위 분할 (처음 보는 LOT 로 평가)"""
-    if mode == 'lot':
-        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-        tr, te = next(gss.split(X, y, groups))
-        return X.iloc[tr], X.iloc[te], y.iloc[tr], y.iloc[te]
+def split_data(X, y, stratify=None):
+    """강사님 방식 : 주어진 데이터를 무작위 8:2 (Train / Test) 로 분할"""
     return train_test_split(X, y, test_size=0.2, random_state=42, stratify=stratify)
 
 
 # %% 2. EDA (강사님 코드 기반)
-def _grid(n, wid=3):
+def _grid(n, wid=3, h=2.4):
     heig = (n + wid - 1) // wid
-    fig, axes = plt.subplots(heig, wid, figsize=(12, 2.6 * heig))
-    return fig, np.array(axes).reshape(-1)
+    fig, axes = plt.subplots(heig, wid, figsize=(12, h * heig), squeeze=False)
+    return fig, axes.reshape(-1)
+
+
+def outlier_cols(df_number):
+    """평균 ± 3σ 밖 값이 있는 변수 목록"""
+    out = []
+    for c in df_number.columns:
+        m, s = df_number[c].mean(), df_number[c].std()
+        if df_number[c].max() > m + 3 * s or df_number[c].min() < m - 3 * s:
+            out.append(c)
+    return out
 
 
 def hist_pro(df_number):
     fig, axes = _grid(len(df_number.columns))
+    outs = outlier_cols(df_number)
     for ax, col in zip(axes, df_number.columns):
-        t_mean, t_std = df_number[col].mean(), df_number[col].std()
-        ucl, lcl = t_mean + 3 * t_std, t_mean - 3 * t_std
-        out = (df_number[col].max() > ucl) or (df_number[col].min() < lcl)
-        ax.set_title(col + (': 이상치 확인' if out else ''), fontsize=8, color='red' if out else 'black')
-        ax.hist(df_number[col], bins=30, color='skyblue', edgecolor='black')
-        ax.axvline(t_mean, color='red', linestyle='--', linewidth=1)
-        ax.axvline(ucl, color='orange', linestyle=':', linewidth=1)
-        ax.axvline(lcl, color='orange', linestyle=':', linewidth=1)
+        m, s = df_number[col].mean(), df_number[col].std()
+        ax.hist(df_number[col], bins=40, color=C_BLUE, alpha=0.85, edgecolor='white', linewidth=0.4)
+        ax.axvspan(m - 3 * s, m + 3 * s, color=C_BLUE, alpha=0.06, lw=0)
+        ax.axvline(m, color=INK2, lw=1)
+        for v in (m - 3 * s, m + 3 * s):
+            if not (v < 0 <= df_number[col].min()):      # 음수 하한(파티클 등)은 의미 없어 생략
+                ax.axvline(v, color=C_RED, lw=1, ls='--')
+        ax.set_title(col, loc='left')
+        n_out = int(((df_number[col] > m + 3 * s) | (df_number[col] < m - 3 * s)).sum())
+        if n_out:
+            ax.text(1, 1.02, f'3σ 밖 {n_out}개', transform=ax.transAxes, ha='right', va='bottom',
+                    fontsize=8, color=C_RED, fontweight='bold')
+        ax.grid(axis='x', visible=False)
     for ax in axes[len(df_number.columns):]:
         ax.axis('off')
     fig.tight_layout()
@@ -178,15 +206,24 @@ def hist_pro(df_number):
 
 
 def line_pro(df_number):
-    fig, axes = _grid(len(df_number.columns))
+    fig, axes = _grid(len(df_number.columns), wid=2, h=2.2)
+    outs = outlier_cols(df_number)
+    x = np.arange(len(df_number))
     for ax, col in zip(axes, df_number.columns):
-        t_mean, t_std = df_number[col].mean(), df_number[col].std()
-        ucl, lcl = t_mean + 3 * t_std, t_mean - 3 * t_std
-        out = (df_number[col].max() > ucl) or (df_number[col].min() < lcl)
-        ax.set_title(col + (': 이상치 확인' if out else ''), fontsize=8, color='red' if out else 'black')
-        ax.plot(range(len(df_number)), df_number[col], linewidth=0.5)
-        ax.axhline(ucl, color='r', linestyle='dashed')
-        ax.axhline(lcl, color='r', linestyle='dashed')
+        v = df_number[col].values
+        m, s = v.mean(), v.std()
+        bad = (v > m + 3 * s) | (v < m - 3 * s)
+        ax.plot(x, v, color=C_BLUE, lw=0.6)
+        ax.scatter(x[bad], v[bad], s=10, color=C_RED, zorder=3)
+        for k in (-3, 3):
+            if not (m + k * s < 0 <= v.min()):
+                ax.axhline(m + k * s, color=C_RED, lw=0.9, ls='--')
+        ax.axhline(m, color=INK2, lw=0.8)
+        ax.set_title(col, loc='left')
+        if bad.any():
+            ax.text(1, 1.02, f'3σ 밖 {bad.sum()}점', transform=ax.transAxes, ha='right', va='bottom',
+                    fontsize=8, color=C_RED, fontweight='bold')
+        ax.set_xlim(0, len(v))
     for ax in axes[len(df_number.columns):]:
         ax.axis('off')
     fig.tight_layout()
@@ -195,16 +232,30 @@ def line_pro(df_number):
 
 def corr_pro(df, target):
     cols = PROCESS_COLS + ['Recipe_Dev_Count', 'RF_Reflect_Ratio', 'CMP_Removal', target]
-    corr = df[cols].corr()[target].abs().sort_values(ascending=False)
-    sorted_cols = corr.index
-    fig, ax = plt.subplots(2, 1, figsize=(11, 16))
-    sns.heatmap(df[sorted_cols].corr(), annot=True, fmt='.2f', cmap='YlGnBu', ax=ax[0],
-                linewidths=0.5, cbar_kws={'shrink': .8}, annot_kws={'size': 7})
-    ax[0].set_title(f'공정 변수 간 상관관계 (정렬 기준: {target})', fontsize=14)
-    ax[1].barh(sorted_cols[1:][::-1], corr.values[1:][::-1], color='#3182bd')
-    ax[1].set_title(f'{target} 와의 상관계수 |r|')
-    fig.tight_layout()
-    return fig, sorted_cols[1:]
+    r = df[cols].corr()[target].drop(target)
+    order = r.abs().sort_values(ascending=False).index
+    fig_bar, ax = plt.subplots(figsize=(7, 5.2))
+    vals = r[order][::-1]
+    ax.barh(vals.index, vals.values, color=[C_BLUE if v >= 0 else C_ORANGE for v in vals.values], height=0.65)
+    ax.axvline(0, color=INK2, lw=0.8)
+    for y, v in enumerate(vals.values):
+        ax.text(v + (0.01 if v >= 0 else -0.01), y, f'{v:+.2f}', va='center',
+                ha='left' if v >= 0 else 'right', fontsize=8, color=INK2)
+    lim = max(0.1, vals.abs().max() * 1.25)
+    ax.set_xlim(-lim, lim)
+    ax.set_title(f'{target} 와의 상관계수 r  (파랑 = 양(+), 주황 = 음(−))', loc='left')
+    ax.grid(axis='y', visible=False)
+    fig_bar.tight_layout()
+
+    top = [target] + list(order[:10])
+    fig_hm, ax2 = plt.subplots(figsize=(8, 6.5))
+    sns.heatmap(df[top].corr(), annot=True, fmt='.2f', cmap='RdBu_r', vmin=-1, vmax=1, center=0, ax=ax2,
+                linewidths=1, linecolor='white', cbar_kws={'shrink': .7}, annot_kws={'size': 7}, square=True)
+    ax2.set_title('상관계수 상위 10개 변수 히트맵', loc='left')
+    ax2.grid(False)
+    ax2.tick_params(labelsize=7)
+    fig_hm.tight_layout()
+    return fig_bar, fig_hm, order
 
 
 # %% 3. [공정] 공정 조건 분석
@@ -227,26 +278,77 @@ def recipe_check(df):
     return pd.DataFrame(out)
 
 
-def process_pro(df):
-    """챔버·가스별 두께/파티클/증착속도/균일도 + 레시피 이탈 개수별 불량률"""
-    fig, ax = plt.subplots(3, 2, figsize=(12, 13))
+def recipe_rate_fig(df):
+    """레시피 파라미터별 이탈 시 불량률 vs 정상 레시피 불량률"""
+    t = recipe_check(df)
+    base = t.iloc[-1]
+    t = t.iloc[:-1]
+    fig, axes = plt.subplots(1, 2, figsize=(12, 3.6), sharey=True)
+    for ax, col, color, base_v, title in [
+            (axes[0], '이탈 시 두께 불량률(%)', C_BLUE, base['이탈 시 두께 불량률(%)'], '두께 불량률'),
+            (axes[1], '이탈 시 파티클 불량률(%)', C_ORANGE, base['이탈 시 파티클 불량률(%)'], '파티클 불량률')]:
+        ax.barh(t['파라미터'], t[col], color=color, height=0.6)
+        ax.axvline(base_v, color=INK2, ls='--', lw=1, label=f'정상 레시피 불량률 {base_v}%')
+        ax.legend(loc='lower right')
+        for y, v in enumerate(t[col]):
+            ax.text(v + 1, y, f'{v:.1f}%', va='center', fontsize=8, color=INK2)
+        ax.set_xlim(0, 110)
+        ax.set_title(f'파라미터 이탈 시 {title} (%)', loc='left')
+        ax.grid(axis='y', visible=False)
+    axes[0].invert_yaxis()
+    fig.tight_layout()
+    return fig
+
+
+def chamber_fig(df):
     order = sorted(df['Chamber'].unique())
-    sns.boxplot(data=df, x='Chamber', y='Depo_THK', hue='Precursor', order=order, ax=ax[0, 0])
-    ax[0, 0].set_title('챔버별 증착 두께 (Å)')
-    sns.boxplot(data=df, x='Chamber', y='Particle', hue='Precursor', order=order, ax=ax[0, 1], showfliers=False)
-    ax[0, 1].set_title('챔버별 파티클 (이상치 제외 표시)')
-    sns.boxplot(data=df, x='Precursor', y='Depo_Rate', ax=ax[1, 0])
-    ax[1, 0].set_title('가스별 증착 속도 (Å/s) : TEOS 가 약 2배 빠름')
-    sns.histplot(data=df, x='Uniformity', hue='Precursor', bins=40, ax=ax[1, 1])
-    ax[1, 1].set_title('두께 균일도 (EDGE-CENTER 차 / 두께, %)')
+    fig, axes = plt.subplots(1, 2, figsize=(12, 3.8))
+    sns.boxplot(data=df, x='Chamber', y='Depo_THK', hue='Precursor', order=order, ax=axes[0],
+                palette=PALETTE_GAS, fliersize=1.5, linewidth=0.8, width=0.5)
+    axes[0].set_title('챔버별 증착 두께 (Å)', loc='left')
+    sns.boxplot(data=df, x='Chamber', y='Particle', hue='Precursor', order=order, ax=axes[1],
+                palette=PALETTE_GAS, showfliers=False, linewidth=0.8, width=0.5)
+    axes[1].set_title('챔버별 파티클 (개, 이상치 표시 생략)', loc='left')
+    for ax in axes:
+        ax.grid(axis='x', visible=False)
+        ax.set_xlabel('Chamber')
+    fig.tight_layout()
+    return fig
+
+
+def quality_fig(df):
+    fig, axes = plt.subplots(1, 2, figsize=(12, 3.6))
+    for gas, color in PALETTE_GAS.items():
+        d = df[df['Precursor'] == gas]
+        axes[0].hist(d['Depo_Rate'], bins=40, color=color, alpha=0.8, label=f'{gas} (평균 {d["Depo_Rate"].mean():.1f})')
+        axes[1].hist(d['Uniformity'], bins=40, color=color, alpha=0.7, label=gas)
+    axes[0].set_title('가스별 증착 속도 (Å/s) : TEOS 가 약 2배 빠름', loc='left')
+    axes[1].set_title('두께 균일도 (EDGE−CENTER 차 / 두께, %) : 작을수록 균일', loc='left')
+    for ax in axes:
+        ax.legend()
+        ax.grid(axis='x', visible=False)
+    fig.tight_layout()
+    return fig
+
+
+def lot_fig(df):
     rate = df.groupby('Recipe_Dev_Count')[['Depo_THK_y', 'Particle_y']].mean() * 100
-    rate.plot(kind='bar', ax=ax[2, 0], color=['#3182bd', '#e6550d'], rot=0)
-    ax[2, 0].set_title('레시피 이탈 개수별 불량률 (%)')
-    ax[2, 0].set_xlabel('표준 레시피에서 벗어난 파라미터 수')
     lot = df.groupby('LOT')['Depo_THK_y'].sum()
-    ax[2, 1].hist(lot[lot > 0], bins=25, color='#756bb1')
-    ax[2, 1].set_title('두께 불량이 있는 LOT 의 LOT당 불량 수')
-    ax[2, 1].set_xlabel('LOT 내 불량 웨이퍼 수 (최대 25)')
+    fig, axes = plt.subplots(1, 2, figsize=(12, 3.6))
+    x = np.arange(len(rate))
+    axes[0].bar(x - 0.18, rate['Depo_THK_y'], 0.34, color=C_BLUE, label='두께 불량률')
+    axes[0].bar(x + 0.18, rate['Particle_y'], 0.34, color=C_ORANGE, label='파티클 불량률')
+    for i, (a, b) in enumerate(rate.values):
+        axes[0].text(i - 0.18, a + 0.3, f'{a:.1f}', ha='center', fontsize=8, color=INK2)
+        axes[0].text(i + 0.18, b + 0.3, f'{b:.1f}', ha='center', fontsize=8, color=INK2)
+    axes[0].set_xticks(x, [f'{i}개' for i in rate.index])
+    axes[0].set_title('표준 레시피에서 벗어난 파라미터 수별 불량률 (%)', loc='left')
+    axes[0].legend(); axes[0].grid(axis='x', visible=False)
+    v = lot[lot > 0]
+    axes[1].hist(v, bins=np.arange(0.5, 26.5, 1), color=C_VIOLET, edgecolor='white')
+    axes[1].set_title(f'두께 불량이 있는 LOT {len(v)}개의 LOT당 불량 수', loc='left')
+    axes[1].set_xlabel('LOT 내 불량 웨이퍼 수 (최대 25)')
+    axes[1].grid(axis='x', visible=False)
     fig.tight_layout()
     return fig
 
@@ -265,11 +367,11 @@ def get_classifiers(w):
     }
 
 
-def binary_model(df, target, split='random'):
+def binary_model(df, target):
     X = make_features(df)
     y = df[target + '_y']
     feature_cols = X.columns.tolist()
-    X_train, X_test, y_train, y_test = split_data(X, y, df['LOT'], split, stratify=y)
+    X_train, X_test, y_train, y_test = split_data(X, y, stratify=y)
     w = round((y_train == 0).sum() / max((y_train == 1).sum(), 1))   # 양품/불량 비율로 가중치
 
     scaler = StandardScaler()
@@ -280,30 +382,48 @@ def binary_model(df, target, split='random'):
     for name, model in get_classifiers(w).items():
         model.fit(X_train_s, y_train)
         y_pred = model.predict(X_test_s)
+        cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
         results.append({'Model명': name, 'model': model, 'scaler': scaler,
                         'Accuracy': accuracy_score(y_test, y_pred),
                         'Precision': precision_score(y_test, y_pred, zero_division=0),
                         'Recall': recall_score(y_test, y_pred, zero_division=0),
                         'F1-Score': f1_score(y_test, y_pred, zero_division=0),
-                        'y_pred': y_pred, 'feature_cols': feature_cols, 'split': split})
+                        '놓친 불량(FN)': int(cm[1, 0]), '과검(FP)': int(cm[0, 1]),
+                        'y_pred': y_pred, 'feature_cols': feature_cols})
     # [공정] F1 동점이면 Recall(불량 놓치지 않기) 우선 → 불량 유출이 가장 큰 손실
     df_res = pd.DataFrame(results).sort_values(['F1-Score', 'Recall'], ascending=False).reset_index(drop=True)
 
     n = len(df_res)
-    fig, axes = plt.subplots(n, 2, figsize=(10, 3.2 * n))
-    for i in range(n):
+    fig, axes = plt.subplots(1, n, figsize=(2.6 * n, 2.9))
+    for i, ax in enumerate(axes):
         r = df_res.loc[i]
         cm = confusion_matrix(y_test, r['y_pred'], labels=[0, 1])
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[i, 0],
-                    xticklabels=['정상(0)', '불량(1)'], yticklabels=['정상(0)', '불량(1)'])
-        axes[i, 0].set_title(f"{r['Model명']}  F1={r['F1-Score']:.3f}")
-        axes[i, 0].set_xlabel('예측'); axes[i, 0].set_ylabel('실제')
-        axes[i, 1].bar(['놓친 불량(FN)', '과검(FP)'], [cm[1, 0], cm[0, 1]], color=['#d62728', '#ff9896'])
-        axes[i, 1].set_title('불량 유출 vs 과검')
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax, cbar=False, linewidths=2, linecolor='white',
+                    xticklabels=['정상', '불량'], yticklabels=['정상', '불량'], annot_kws={'size': 11})
+        ax.set_title(('★ ' if i == 0 else '') + r['Model명'].replace('Classifier', ''), fontsize=9,
+                     color=C_BLUE if i == 0 else INK)
+        ax.set_xlabel('예측'); ax.set_ylabel('실제' if i == 0 else '')
+        ax.grid(False)
     fig.tight_layout()
 
     joblib.dump(df_res.loc[0], os.path.join(MODEL_DIR, f'binary_{target}.pkl'))
-    return fig, df_res[['Model명', 'Accuracy', 'Precision', 'Recall', 'F1-Score']]
+    return fig, df_res[['Model명', 'F1-Score', 'Recall', 'Precision', 'Accuracy', '놓친 불량(FN)', '과검(FP)']]
+
+
+def score_fig(res, key):
+    """모델별 점수 막대 (1위 강조)"""
+    r = res.iloc[::-1]
+    fig, ax = plt.subplots(figsize=(6, 0.42 * len(r) + 0.8))
+    colors = [C_BLUE if i == len(r) - 1 else '#c9d9ef' for i in range(len(r))]
+    ax.barh(r['Model명'].str.replace('Classifier', '').str.replace('Regressor', ''), r[key].clip(lower=0),
+            color=colors, height=0.6)
+    for y, v in enumerate(r[key]):
+        ax.text(max(v, 0) + 0.01, y, f'{v:.3f}', va='center', fontsize=8, color=INK2)
+    ax.set_xlim(0, 1.12)
+    ax.set_title(f'모델별 {key}', loc='left')
+    ax.grid(axis='y', visible=False)
+    fig.tight_layout()
+    return fig
 
 
 def _load_or_train(df, kind, target):
@@ -352,11 +472,11 @@ def get_regressors():
     }
 
 
-def linear_model(df, target, split='random'):
+def linear_model(df, target):
     X = make_features(df)
     y = df[target]
     feature_cols = X.columns.tolist()
-    X_train, X_test, y_train, y_test = split_data(X, y, df['LOT'], split)
+    X_train, X_test, y_train, y_test = split_data(X, y)
     scaler = StandardScaler()
     X_train_s = scaler.fit_transform(X_train)
     X_test_s = scaler.transform(X_test)
@@ -369,18 +489,19 @@ def linear_model(df, target, split='random'):
                         'MAE': mean_absolute_error(y_test, y_pred),
                         'RMSE': np.sqrt(mean_squared_error(y_test, y_pred)),
                         'R2 Score': r2_score(y_test, y_pred),
-                        'y_test': y_test, 'y_pred': y_pred, 'feature_cols': feature_cols, 'split': split})
+                        'y_test': y_test, 'y_pred': y_pred, 'feature_cols': feature_cols})
     df_res = pd.DataFrame(results).sort_values('R2 Score', ascending=False).reset_index(drop=True)
 
     n = len(df_res)
-    fig, axes = plt.subplots((n + 2) // 3, 3, figsize=(12, 3.6 * ((n + 2) // 3)))
-    axes = np.array(axes).reshape(-1)
+    fig, axes = plt.subplots(2, 4, figsize=(13, 6.2))
+    axes = axes.reshape(-1)
     lo, hi = y_test.min(), y_test.max()
-    for ax, (_, r) in zip(axes, df_res.iterrows()):
-        ax.scatter(r['y_test'], r['y_pred'], s=6, alpha=0.5)
-        ax.plot([lo, hi], [lo, hi], 'r--', lw=1.5)
-        ax.set_title(f"{r['Model명']}  R2={r['R2 Score']:.3f}", fontsize=9)
-        ax.set_xlabel('실제'); ax.set_ylabel('예측'); ax.grid(True, alpha=0.3)
+    for i, (ax, (_, r)) in enumerate(zip(axes, df_res.iterrows())):
+        ax.scatter(r['y_test'], r['y_pred'], s=5, alpha=0.45, color=C_BLUE if i == 0 else C_GRAY, lw=0)
+        ax.plot([lo, hi], [lo, hi], color=C_RED, ls='--', lw=1)
+        ax.set_title(('★ ' if i == 0 else '') + f"{r['Model명'].replace('Regressor', '')}  R²={r['R2 Score']:.3f}",
+                     fontsize=9, color=C_BLUE if i == 0 else INK, loc='left')
+        ax.set_xlabel('실제'); ax.set_ylabel('예측')
     for ax in axes[n:]:
         ax.axis('off')
     fig.tight_layout()
@@ -415,10 +536,9 @@ def model_summary():
             if os.path.exists(p):
                 r = joblib.load(p)
                 score = f"F1 {r['F1-Score']:.3f}" if kind == 'binary' else f"R² {r['R2 Score']:.3f}"
-                rows.append({'구분': task, 'Target': t, '채택 모델': r['Model명'], '점수': score,
-                             '분할 방식': 'LOT 단위' if r.get('split') == 'lot' else '무작위'})
+                rows.append({'구분': task, 'Target': t, '채택 모델': r['Model명'], '점수': score})
             else:
-                rows.append({'구분': task, 'Target': t, '채택 모델': '(미학습)', '점수': '-', '분할 방식': '-'})
+                rows.append({'구분': task, 'Target': t, '채택 모델': '(미학습)', '점수': '-'})
     return pd.DataFrame(rows)
 
 
